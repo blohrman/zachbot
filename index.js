@@ -1,7 +1,9 @@
 const Discord = require("discord.js");
 const client = new Discord.Client();
+
 const config = require("./config.json");
 const zachcount = require("./commands/zachcount.js");
+const zachpic = require("./commands/zachpic.js");
 
 const init = config.initializer;
 
@@ -14,8 +16,16 @@ client.on("ready", () => {
 client.on("message", msg => {
     if (msg.content[0] === init) {
         const command = msg.content.substring(1);
-        if (command === "zachcount") {
-            zachcount(msg);
+        switch (command) {
+            case ("zachcount"):
+                zachcount(msg);
+                break;
+            case ("zachpic"):
+                zachpic(msg);
+                break;
+            default:
+                msg.channel.send("Whoopsies! Looks like you made a fuckie-wuckie. Try again!");
+                break;
         }
     }
 });
