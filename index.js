@@ -4,8 +4,10 @@ const client = new Discord.Client();
 const config = require("./config.json");
 const zachcount = require("./commands/zachcount.js");
 const zachpic = require("./commands/zachpic.js");
+const dbupdate = require("./commands/dbupdate.js");
 
 const init = config.initializer;
+const channels = config.channels;
 
 // echo when ready
 client.on("ready", () => {
@@ -29,5 +31,14 @@ client.on("message", msg => {
         }
     }
 });
+
+// updates database with new messages for each channel in config
+function update() {
+    channels.forEach(async channel => {
+        const id = channel.id;
+        const currChannel = await client.channels.fetch(id);
+        await dbupdate(currChannel);
+    });
+}
 
 client.login(config.token);
