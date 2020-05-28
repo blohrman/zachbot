@@ -1,11 +1,8 @@
 const MongoClient = require("mongodb").MongoClient;
 
-const config = require("config.json");
-const dburl = config.dburl;
-
 const dbName = "ZachMessages";
 
-async function dbupdate(channel) {
+async function dbupdate(channel, dburl) {
     const client = new MongoClient(dburl, {
         useNewUrlParser: true,
         useUnifiedTopology: true
@@ -20,36 +17,100 @@ async function dbupdate(channel) {
 
 async function ingestMessages(channel, db) {
     const messageCollection = db.collection("messages");
-    const lastMessage = await messageCollection.find({}).limit(1);
 
-    if (!(lastMessage)) {
-        // account for if the db hasn't been created? is that something i need to do?
-        // or should i just ensure that it's been created before we start lol
+    // query database for the last ingested message
+    const lastMessage = await messageCollection.find({}).sort({"sent": 1}).limit(1);
+
+    let exit = false;
+    let toInsert = [];
+    let count = 0;
+
+    while (!(exit)) {
+        let firstMessageIngestedID = "";
+        let latestMessageIngestedID = "";
+        const lastMessageInBaseID = lastMessage.messageID;
+
+        let messages;
+        if (latestMessageIngestedID) {
+            // use the latest ingested message ID to get messages before that
+            messages = await channel.messages.fetch({
+                before: latestMessageIngestedID
+            });
+        } else {
+            // if latestMessageIngestedID is falsy, means we haven't ingested any messages, so get first 50
+            messages = await channel.messages.fetch();
+        }
+
+        // to array
+        messages = messages.array();
+
+        // format each message
+        for (let element of messages) {
+            let message = await processMessage(element);
+
+            // if the message's ID is the same as the last message stored, stop eating messages because we're caught up
+            // also, if the first message ingested's ID is the same as the current message's ID, that mean's we've reached the end of the
+            // channel history and need to stop ingesting
+            if (message.messageID === lastMessageInBaseID || ((message.messageID === firstMessageIngestedID) && count !== 0)) {
+                exit = true;
+                break;
+            } else {
+                toInsert.push(message);
+                latestMessageIngestedID = message.messageID;
+
+                if (count === 0) {
+                    firstMessageIngestedID = message.messageID;
+                }
+                count++;
+            }
+        }
     }
 
-    //TODO: loop through until no more messages
+    // debug
+    console.log(toInsert);
+    console.log(toInsert.length);
 
-    let messages = await channel.messages.fetch({
-        after: lastMessage.messageID
-    }).array();
+    //await messageCollection.insertMany(toInsert);
+}
 
-    let toInsert = [];
+async function processMessage(message) {
+    return {
+        "messageID": message.id,
+        "userID": message.author.id,
+        "sent": message.createdAt,
+        "channelID": message.channel.id,
+        "reactions": await getReactions(message)
+    };
+}
 
-    messages.forEach(element => {
-        let message = {
-            "messageID": element.id,
-            "userID": element.author.id,
-            "sent": element.createdAt,
-            "channelID": element.channel.id,
-            "reactions": element.reactions.cache // fix this
-        };
+function getReactions(message) {
 
-        toInsert.push(message);
+    // get the reactions from current message
+    const reactionCollection = message.reactions.cache.array();
+    const reactions = [];
+
+    reactionCollection.forEach(async reaction => {
+
+        // for some reason this data isn't cached with the message, so we have to await it while it fetches
+        let users = await reaction.users.fetch();
+        users = users.array();
+
+        // get the user IDs
+        let userIDs = [];
+        users.forEach(user => {
+            userIDs.push(user.id);
+        });
+
+        // get the actual reaction
+        let currentReaction = reaction.emoji.toString();
+        
+        reactions.push({
+           "name": currentReaction,
+           "users": userIDs
+        });
     });
 
-    let finalMessageID = toInsert[toInsert.length - 1].messageID;
-
-    await messageCollection.insertMany(toInsert);
+    return reactions;
 }
 
 module.exports = dbupdate;

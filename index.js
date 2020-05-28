@@ -8,10 +8,14 @@ const dbupdate = require("./commands/dbupdate.js");
 
 const init = config.initializer;
 const channels = config.channels;
+const dburl = config.dburl;
 
 // echo when ready
 client.on("ready", () => {
     console.log(`Logged in as ${client.user.tag}!`);
+
+    // run update on ready for testing/debug purposes
+    update();
 });
 
 // processes a message
@@ -37,7 +41,7 @@ function update() {
     channels.forEach(async channel => {
         const id = channel.id;
         const currChannel = await client.channels.fetch(id);
-        await dbupdate(currChannel);
+        await dbupdate(currChannel, dburl);
     });
 }
 
