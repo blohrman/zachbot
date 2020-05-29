@@ -13,71 +13,61 @@ async function dbupdate(channel, dburl) {
 
     await ingestMessages(channel, db);
 
+    await addMembers(channel, db);
+
 }
 
 async function ingestMessages(channel, db) {
     const messageCollection = db.collection("messages");
 
     // query database for the last ingested message
-    const lastMessage = await messageCollection.find({}).sort({"sent": 1}).limit(1);
+    let lastMessage = await messageCollection.find({}).sort({sent: -1}).limit(1).toArray();
+
+    lastMessage = lastMessage[0];
 
     let exit = false;
     let toInsert = [];
-    let count = 0;
+    let latestMessageIngestedID = "";
+    const lastMessageInBaseID = lastMessage.messageID;
 
     while (!(exit)) {
-        let firstMessageIngestedID = "";
-        let latestMessageIngestedID = "";
-        const lastMessageInBaseID = lastMessage.messageID;
 
-        let messages;
-        if (latestMessageIngestedID) {
-            // use the latest ingested message ID to get messages before that
-            messages = await channel.messages.fetch({
-                before: latestMessageIngestedID
-            });
-        } else {
-            // if latestMessageIngestedID is falsy, means we haven't ingested any messages, so get first 50
-            messages = await channel.messages.fetch();
-        }
+        // if there is a message ID to get messages before, use that. if not, get the most recent messages
+        let messages = await channel.messages.fetch(latestMessageIngestedID ? { before: latestMessageIngestedID} : {});
 
         // to array
         messages = messages.array();
 
-        // format each message
+        // if we ingested no more messages, than wham bam there ain't nothing new to add to the db
+        if (messages.length === 0) {
+            exit = true;
+            continue;
+        }
+
+        // format & push each message to the array
         for (let element of messages) {
             let message = await processMessage(element);
 
-            // if the message's ID is the same as the last message stored, stop eating messages because we're caught up
-            // also, if the first message ingested's ID is the same as the current message's ID, that mean's we've reached the end of the
-            // channel history and need to stop ingesting
-            if (message.messageID === lastMessageInBaseID || ((message.messageID === firstMessageIngestedID) && count !== 0)) {
+            if (message.messageID === lastMessageInBaseID) {
                 exit = true;
                 break;
-            } else {
-                toInsert.push(message);
-                latestMessageIngestedID = message.messageID;
-
-                if (count === 0) {
-                    firstMessageIngestedID = message.messageID;
-                }
-                count++;
             }
+
+            toInsert.push(message);
+            latestMessageIngestedID = message.messageID;
         }
     }
 
-    // debug
-    console.log(toInsert);
-    console.log(toInsert.length);
-
-    //await messageCollection.insertMany(toInsert);
+    if (toInsert.length !== 0) {
+        await messageCollection.insertMany(toInsert);
+    }
 }
 
 async function processMessage(message) {
     return {
         "messageID": message.id,
         "userID": message.author.id,
-        "sent": message.createdAt,
+        "sent": new Date(message.createdAt),
         "channelID": message.channel.id,
         "reactions": await getReactions(message)
     };
@@ -103,7 +93,7 @@ function getReactions(message) {
 
         // get the actual reaction
         let currentReaction = reaction.emoji.toString();
-        
+
         reactions.push({
            "name": currentReaction,
            "users": userIDs
@@ -111,6 +101,43 @@ function getReactions(message) {
     });
 
     return reactions;
+}
+
+async function addMembers(channel, db) {
+
+    // get the users already in the db
+    const usersCollection = db.collection("users");
+    const usersInBase = await usersCollection.find({}).toArray();
+
+    // get the users of the channel
+    let membersCollection = channel.members;
+    membersCollection = membersCollection.array();
+
+    // format users
+    let members = [];
+    membersCollection.forEach(element => {
+        let member = {
+            "name": element.user.tag,
+            "userID": element.user.id
+        };
+
+        members.push(member);
+    });
+
+    // check if each user is in the db, if not, add them to the db
+    for (let member of members) {
+        let inBase = false;
+        for (let user of usersInBase) {
+            if (member.userID === user.userID) {
+                inBase = true;
+                break;
+            }
+        }
+
+        if (!(inBase)) {
+            await usersCollection.insertOne(member);
+        }
+    }
 }
 
 module.exports = dbupdate;
